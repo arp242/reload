@@ -27,6 +27,7 @@ package reload // import "github.com/teamwork/reload"
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -71,21 +72,24 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 	}
 	closeWatcher = watcher.Close
 
+	timers := make(map[string]*time.Timer)
+
 	binSelf, err = self()
 	if err != nil {
 		return err
 	}
+	timers[binSelf] = stoppedTimer(Exec)
 
 	// Watch the directory, because a recompile renames the existing
 	// file (rather than rewriting it), so we won't get events for that.
 	dirs := make([]string, len(additional)+1)
 	dirs[0] = filepath.Dir(binSelf)
 
-	for i := range additional {
-		path, err := filepath.Abs(additional[i].path)
+	for i, a := range additional {
+		path, err := filepath.Abs(a.path)
 		if err != nil {
 			return fmt.Errorf("reload.Do: cannot get absolute path to %q: %w",
-				additional[i].path, err)
+				a.path, err)
 		}
 
 		s, err := os.Stat(path)
@@ -94,11 +98,12 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 		}
 		if !s.IsDir() {
 			return fmt.Errorf("reload.Do: not a directory: %q; can only watch directories",
-				additional[i].path)
+				a.path)
 		}
 
-		additional[i].path = path
+		a.path = path
 		dirs[i+1] = path
+		timers[path] = stoppedTimer(a.cb)
 	}
 
 	done := make(chan bool)
@@ -106,7 +111,9 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 		for {
 			select {
 			case err := <-watcher.Errors:
-				log("reload error: %v", err)
+				if err != nil {
+					log("reload error: %v", err)
+				}
 			case event := <-watcher.Events:
 				// Ensure that we use the correct events, as they are not uniform accross
 				// platforms. See https://github.com/fsnotify/fsnotify/issues/74
@@ -126,15 +133,12 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 				}
 
 				if event.Name == binSelf {
-					// Wait for writes to finish.
-					time.Sleep(100 * time.Millisecond)
-					Exec()
+					timers[binSelf].Reset(100 * time.Millisecond)
 				}
 
 				for _, a := range additional {
 					if strings.HasPrefix(event.Name, a.path) {
-						time.Sleep(100 * time.Millisecond)
-						a.cb()
+						timers[a.path].Reset(100 * time.Millisecond)
 					}
 				}
 			}
@@ -179,6 +183,12 @@ func Exec() {
 	if err != nil {
 		panic(fmt.Sprintf("cannot restart: %v", err))
 	}
+}
+
+func stoppedTimer(cb func()) *time.Timer {
+	t := time.AfterFunc(math.MaxInt64, cb)
+	t.Stop()
+	return t
 }
 
 // Get location to executable.
