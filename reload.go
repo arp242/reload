@@ -30,7 +30,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -101,7 +100,7 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 				a.path)
 		}
 
-		a.path = path
+		additional[i].path = path
 		dirs[i+1] = path
 		timers[path] = stoppedTimer(a.cb)
 	}
@@ -115,19 +114,7 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 					log("reload error: %v", err)
 				}
 			case event := <-watcher.Events:
-				// Ensure that we use the correct events, as they are not uniform accross
-				// platforms. See https://github.com/fsnotify/fsnotify/issues/74
-				var trigger bool
-				switch runtime.GOOS {
-				case "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
-					trigger = event.Op&fsnotify.Create == fsnotify.Create
-				case "linux":
-					trigger = event.Op&fsnotify.Write == fsnotify.Write
-				default:
-					trigger = event.Op&fsnotify.Create == fsnotify.Create
-					log("reload: untested GOOS %q; this package may not work correctly", runtime.GOOS)
-				}
-
+				trigger := (event.Op&fsnotify.Write == fsnotify.Write) || (event.Op&fsnotify.Create == fsnotify.Create)
 				if !trigger {
 					continue
 				}
