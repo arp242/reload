@@ -1,29 +1,35 @@
 // Package reload offers lightweight automatic reloading of running processes.
 //
-// After initialisation with reload.Do() any changes to the binary will restart
+// After initialisation with [reload.Do] any changes to the binary will restart
 // the process.
 //
 // Example:
 //
-//    go func() {
-//        err := reload.Do(log.Printf)
-//        if err != nil {
-//            panic(err)
-//        }
-//    }()
+//	go func() {
+//	    err := reload.Do(log.Printf)
+//	    if err != nil {
+//	        panic(err)
+//	    }
+//	}()
+//
+// The current process is replaced with [syscall.Exec]; this means that defered
+// functions and signal handlers will not be run. You can use [OnExec] to run
+// some code before the process is restarted.
+//
+// # Additional directories
 //
 // A list of additional directories to watch can be added:
 //
-//    go func() {
-//        err := reload.Do(log.Printf, reload.Dir("tpl", reloadTpl)
-//        if err != nil {
-//            panic(err)
-//        }
-//    }()
+//	go func() {
+//	    err := reload.Do(log.Printf, reload.Dir("tpl", reloadTpl)
+//	    if err != nil {
+//	        panic(err)
+//	    }
+//	}()
 //
-// Note that this package won't prevent race conditions (e.g. when assigning to
-// a global templates variable). You'll need to use sync.RWMutex yourself.
-package reload // import "github.com/teamwork/reload"
+// This will run reloadTpl if any file in the "tpl" directory changes. The
+// process won't be restarted.
+package reload
 
 import (
 	"fmt"
@@ -64,7 +70,7 @@ func Dir(path string, cb func()) dir { return dir{path, cb} }
 //
 // The error return will only return initialisation errors. Once initialized it
 // will use the log function to print errors, rather than return.
-func Do(log func(string, ...interface{}), additional ...dir) error {
+func Do(log func(string, ...any), additional ...dir) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("reload.Do: cannot setup watcher: %w", err)
@@ -109,12 +115,17 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 	go func() {
 		for {
 			select {
-			case err := <-watcher.Errors:
-				if err != nil {
-					log("reload error: %v", err)
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
 				}
-			case event := <-watcher.Events:
-				trigger := (event.Op&fsnotify.Write == fsnotify.Write) || (event.Op&fsnotify.Create == fsnotify.Create)
+				log("reload error: %v", err)
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+
+				trigger := event.Has(fsnotify.Write) || event.Has(fsnotify.Create)
 				if !trigger {
 					continue
 				}
@@ -151,6 +162,9 @@ func Do(log func(string, ...interface{}), additional ...dir) error {
 	return nil
 }
 
+// OnExec is called before the current process is replaced.
+var OnExec func()
+
 // Exec replaces the current process with a new copy of itself.
 func Exec() {
 	execName := binSelf
@@ -164,6 +178,10 @@ func Exec() {
 
 	if closeWatcher != nil {
 		closeWatcher()
+	}
+
+	if OnExec != nil {
+		OnExec()
 	}
 
 	err := syscall.Exec(execName, append([]string{execName}, os.Args[1:]...), os.Environ())

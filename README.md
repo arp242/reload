@@ -4,8 +4,8 @@
 
 Lightweight automatic reloading of Go processes.
 
-After initialisation with `reload.Do()` any changes to the binary (and *only*
-the binary) will restart the process. For example:
+After initialisation with `reload.Do()` any changes to the binary will restart
+the process. For example:
 
 ```go
 func main() {
@@ -38,6 +38,9 @@ func main() {
     }()
 }
 ```
+
+This will run reloadTpl if any file in the "tpl" directory changes. The process
+won't be restarted.
 
 You can also use `reload.Exec()` to manually restart your process without
 calling `reload.Do()`.
